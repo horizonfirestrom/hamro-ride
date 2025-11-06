@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ride
+      POSTGRES_PASSWORD: ride
+      POSTGRES_DB: ride_db
+    ports:
+      - "55432:5432"        # host:container (changed host port to avoid conflicts)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    command: ["redis-server","--appendonly","yes"]
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
