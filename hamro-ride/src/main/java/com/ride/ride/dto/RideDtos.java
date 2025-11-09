@@ -47,4 +47,9 @@ public class RideDtos {
             @Positive double distanceKm,
             @Positive double estimatedFare
     ) {}
+    
+ // NEW: for driver to update ride status
+    public record UpdateRideStatusReq(
+            @NotNull RideStatus status
+    ) {}
 }

@@ -23,6 +23,7 @@ public class SecurityConfig {
 	    http.authorizeHttpRequests(auth -> auth
 	        .requestMatchers("/api/v1/health", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
 	        .requestMatchers(HttpMethod.POST, "/api/v1/auth/register", "/api/v1/auth/login").permitAll()
+	        .requestMatchers("/api/v1/auth/register","/api/v1/auth/login","/api/v1/health").permitAll()
 	        .requestMatchers("/api/v1/driver/**").hasRole("DRIVER")
 	        .requestMatchers("/api/v1/rides/**").hasRole("PASSENGER")
 	        .anyRequest().authenticated()
