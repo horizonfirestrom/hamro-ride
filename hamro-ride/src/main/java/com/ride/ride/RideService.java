@@ -4,7 +4,6 @@ import com.ride.driver.DriverService;
 import com.ride.driver.dto.DriverDtos;
 import com.ride.ride.dto.RideDtos.CreateRideReq;
 import com.ride.ride.dto.RideDtos.RideResp;
-import com.ride.ride.dto.RideDtos.UpdateRideStatusReq;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,7 +27,7 @@ public class RideService {
         return UUID.fromString(auth.getName());
     }
 
-    // ========== PASSENGER METHODS ==========
+    // ================= PASSENGER =================
 
     @Transactional
     public RideResp createRide(Authentication auth, CreateRideReq req) {
@@ -44,7 +43,7 @@ public class RideService {
         r.setDropoffAddress(req.dropoffAddress());
         r.setStatus(RideStatus.REQUESTED);
 
-        // Try auto-assign nearest ONLINE driver (e.g. within 5km)
+        // auto-assign nearest driver (simple version)
         List<DriverDtos.NearbyDriver> nearby = driverService.nearby(
                 req.pickupLat(), req.pickupLng(), 5, 5_000
         );
@@ -59,31 +58,43 @@ public class RideService {
         return toResp(r);
     }
 
-    public RideResp getRide(UUID id, Authentication auth) {
-        Ride r = rides.findById(id).orElseThrow();
-        UUID userId = currentUserId(auth);
-        // simple visibility: passenger or assigned driver may view
-        if (!r.getPassengerId().equals(userId) &&
-                (r.getDriverId() == null || !r.getDriverId().equals(userId))) {
-            throw new RuntimeException("Forbidden");
-        }
-        return toResp(r);
-    }
-
     public List<RideResp> myRides(Authentication auth) {
         UUID passengerId = currentUserId(auth);
         return rides.findByPassengerIdOrderByCreatedAtDesc(passengerId)
                 .stream().map(this::toResp).toList();
     }
 
-    // ========== DRIVER METHODS ==========
+    public RideResp getRide(UUID id, Authentication auth) {
+        Ride r = rides.findById(id).orElseThrow();
+        UUID me = currentUserId(auth);
+        if (!isParticipant(r, me)) throw forbidden();
+        return toResp(r);
+    }
 
-    /**
-     * Get all active rides assigned to currently authenticated driver.
-     */
+    @Transactional
+    public RideResp cancelAsPassenger(UUID rideId, Authentication auth) {
+        UUID passengerId = currentUserId(auth);
+        Ride r = rides.findById(rideId).orElseThrow();
+
+        if (!passengerId.equals(r.getPassengerId())) throw forbidden();
+        if (!EnumSet.of(
+                RideStatus.REQUESTED,
+                RideStatus.DRIVER_ASSIGNED,
+                RideStatus.DRIVER_ACCEPTED,
+                RideStatus.DRIVER_ARRIVING
+        ).contains(r.getStatus())) {
+            throw new IllegalStateException("Cannot cancel at this stage");
+        }
+
+        r.setStatus(RideStatus.CANCELLED_BY_PASSENGER);
+        rides.save(r);
+        return toResp(r);
+    }
+
+    // ================= DRIVER =================
+
     public List<RideResp> getAssignedRidesForDriver(Authentication auth) {
         UUID driverId = currentUserId(auth);
-        // Fetch all rides where driverId matches and status is not completed/cancelled
         return rides.findByDriverId(driverId).stream()
                 .filter(r -> !EnumSet.of(
                         RideStatus.COMPLETED,
@@ -95,46 +106,94 @@ public class RideService {
                 .toList();
     }
 
-    /**
-     * Driver updates status of an assigned ride.
-     */
     @Transactional
-    public RideResp updateRideStatusAsDriver(UUID rideId,
-                                             UpdateRideStatusReq req,
-                                             Authentication auth) {
-        UUID driverId = currentUserId(auth);
-        Ride r = rides.findById(rideId).orElseThrow();
+    public RideResp acceptAsDriver(UUID rideId, Authentication auth) {
+        Ride r = getRideForDriverOrThrow(rideId, auth);
 
-        if (r.getDriverId() == null || !r.getDriverId().equals(driverId)) {
-            throw new RuntimeException("Forbidden: ride not assigned to this driver");
+        if (r.getStatus() != RideStatus.DRIVER_ASSIGNED &&
+            r.getStatus() != RideStatus.REQUESTED) {
+            throw new IllegalStateException("Ride not in assignable state");
         }
 
-        RideStatus current = r.getStatus();
-        RideStatus target = req.status();
-
-        // Very simple allowed transitions:
-        if (!isAllowedTransitionForDriver(current, target)) {
-            throw new RuntimeException("Invalid status transition: " + current + " -> " + target);
+        // If no driver yet (REQUESTED), this driver is now claiming it (simple version)
+        if (r.getDriverId() == null) {
+            r.setDriverId(currentUserId(auth));
         }
 
-        r.setStatus(target);
+        r.setStatus(RideStatus.DRIVER_ACCEPTED);
         rides.save(r);
         return toResp(r);
     }
 
-    private boolean isAllowedTransitionForDriver(RideStatus from, RideStatus to) {
-        return switch (from) {
-            case DRIVER_ASSIGNED -> (to == RideStatus.DRIVER_ARRIVING
-                    || to == RideStatus.CANCELLED_BY_DRIVER);
-            case DRIVER_ARRIVING -> (to == RideStatus.IN_PROGRESS
-                    || to == RideStatus.CANCELLED_BY_DRIVER);
-            case IN_PROGRESS -> (to == RideStatus.COMPLETED
-                    || to == RideStatus.CANCELLED_BY_DRIVER);
-            default -> false;
-        };
+    @Transactional
+    public RideResp markArriving(UUID rideId, Authentication auth) {
+        Ride r = getRideForDriverOrThrow(rideId, auth);
+        if (r.getStatus() != RideStatus.DRIVER_ACCEPTED) {
+            throw new IllegalStateException("Must accept before arriving");
+        }
+        r.setStatus(RideStatus.DRIVER_ARRIVING);
+        rides.save(r);
+        return toResp(r);
     }
 
-    // ========== HELPERS ==========
+    @Transactional
+    public RideResp startRide(UUID rideId, Authentication auth) {
+        Ride r = getRideForDriverOrThrow(rideId, auth);
+        if (!EnumSet.of(RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVING)
+                .contains(r.getStatus())) {
+            throw new IllegalStateException("Cannot start from current status");
+        }
+        r.setStatus(RideStatus.IN_PROGRESS);
+        rides.save(r);
+        return toResp(r);
+    }
+
+    @Transactional
+    public RideResp completeRide(UUID rideId, Authentication auth) {
+        Ride r = getRideForDriverOrThrow(rideId, auth);
+        if (r.getStatus() != RideStatus.IN_PROGRESS) {
+            throw new IllegalStateException("Only in-progress rides can be completed");
+        }
+        r.setStatus(RideStatus.COMPLETED);
+        rides.save(r);
+        return toResp(r);
+    }
+
+    @Transactional
+    public RideResp cancelAsDriver(UUID rideId, Authentication auth) {
+        Ride r = getRideForDriverOrThrow(rideId, auth);
+        if (!EnumSet.of(
+                RideStatus.REQUESTED,
+                RideStatus.DRIVER_ASSIGNED,
+                RideStatus.DRIVER_ACCEPTED,
+                RideStatus.DRIVER_ARRIVING
+        ).contains(r.getStatus())) {
+            throw new IllegalStateException("Cannot cancel at this stage");
+        }
+        r.setStatus(RideStatus.CANCELLED_BY_DRIVER);
+        rides.save(r);
+        return toResp(r);
+    }
+
+    // ================= INTERNAL HELPERS =================
+
+    private Ride getRideForDriverOrThrow(UUID rideId, Authentication auth) {
+        UUID driverId = currentUserId(auth);
+        Ride r = rides.findById(rideId).orElseThrow();
+        if (r.getDriverId() == null || !r.getDriverId().equals(driverId)) {
+            throw forbidden();
+        }
+        return r;
+    }
+
+    private boolean isParticipant(Ride r, UUID userId) {
+        return r.getPassengerId().equals(userId) ||
+                (r.getDriverId() != null && r.getDriverId().equals(userId));
+    }
+
+    private RuntimeException forbidden() {
+        return new RuntimeException("Forbidden");
+    }
 
     private RideResp toResp(Ride r) {
         return new RideResp(
