@@ -42,4 +42,10 @@ jwt:
   secret: "c2d3f5c9b0e74a1d8f2a3c4b5e6f7081928374655aaabbbcccdddeeefff00112233445566778899aabbccddeeff0011"
   accessTokenMinutes: 60
   refreshTokenDays: 60
+  
+pricing:
+  baseFare: 2.0        # flat fee
+  perMile: 0.75          # price per miles
+  minimumFare: 5.0     # minimum charge
+
 

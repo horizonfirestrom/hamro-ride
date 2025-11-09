@@ -1,7 +1,13 @@
 package com.ride.ride;
 
+import com.ride.common.exception.BadRequestException;
+import com.ride.common.exception.ForbiddenException;
+import com.ride.common.exception.NotFoundException;
+import com.ride.driver.DriverProfile;
+import com.ride.driver.DriverProfileRepository;
 import com.ride.driver.DriverService;
 import com.ride.driver.dto.DriverDtos;
+import com.ride.pricing.FareService;
 import com.ride.ride.dto.RideDtos.CreateRideReq;
 import com.ride.ride.dto.RideDtos.RideResp;
 import org.springframework.security.core.Authentication;
@@ -17,10 +23,14 @@ public class RideService {
 
     private final RideRepository rides;
     private final DriverService driverService;
+    private final FareService fareService;
+    private final DriverProfileRepository driverProfiles;
 
-    public RideService(RideRepository rides, DriverService driverService) {
+    public RideService(RideRepository rides, DriverService driverService, FareService fareService, DriverProfileRepository driverProfiles) {
         this.rides = rides;
         this.driverService = driverService;
+        this.fareService = fareService;
+        this.driverProfiles = driverProfiles;
     }
 
     private UUID currentUserId(Authentication auth) {
@@ -42,6 +52,13 @@ public class RideService {
         r.setDropoffLng(req.dropoffLng());
         r.setDropoffAddress(req.dropoffAddress());
         r.setStatus(RideStatus.REQUESTED);
+        
+        
+		double distanceMiles = fareService.distanceMiles(req.pickupLat(), req.pickupLng(),req.dropoffLat(), req.dropoffLng());
+		double estimatedFare = fareService.estimateFare(distanceMiles);
+        r.setDistanceMiles(distanceMiles);
+        r.setEstimatedFare(estimatedFare);
+     // r.setFinalFare(...) can be set later at completion if needed
 
         // auto-assign nearest driver (simple version)
         List<DriverDtos.NearbyDriver> nearby = driverService.nearby(
@@ -207,7 +224,58 @@ public class RideService {
                 r.getDropoffLng(),
                 r.getDropoffAddress(),
                 r.getStatus(),
-                r.getCreatedAt()
+                r.getCreatedAt(),
+                r.getDistanceMiles(),
+                r.getEstimatedFare(),
+                r.getFinalFare(),
+                r.getDriverRating(),
+                r.getPassengerRating()
         );
     }
+    
+    @Transactional
+    public RideResp rateDriver(UUID rideId, int rating, Authentication auth) {
+        UUID passengerId = currentUserId(auth);
+        Ride r = rides.findById(rideId)
+                .orElseThrow(() -> new NotFoundException("Ride not found"));
+
+        if (!passengerId.equals(r.getPassengerId())) {
+            throw new ForbiddenException("You are not passenger of this ride");
+        }
+        if (r.getStatus() != RideStatus.COMPLETED) {
+            throw new BadRequestException("Can rate driver only after ride is completed");
+        }
+        if (rating < 1 || rating > 5) {
+            throw new BadRequestException("Rating must be between 1 and 5");
+        }
+
+        // set / overwrite rating for this ride
+        r.setDriverRating(rating);
+        rides.save(r);
+
+        // --- NEW: recompute driver's average rating ---
+        if (r.getDriverId() != null) {
+            var profileOpt = driverProfiles.findByUserId(r.getDriverId());
+            if (profileOpt.isPresent()) {
+                DriverProfile profile = profileOpt.get();
+
+                var ratedRides = rides.findByDriverIdAndDriverRatingIsNotNull(r.getDriverId());
+                double avg = ratedRides.stream()
+                        .mapToInt(Ride::getDriverRating)
+                        .average()
+                        .orElse(rating); // fallback, though list shouldn't be empty
+
+                profile.setRating(roundToOneDecimal(avg));
+                driverProfiles.save(profile);
+            }
+        }
+
+        return toResp(r);
+    }
+
+    private double roundToOneDecimal(double value) {
+        return Math.round(value * 10.0) / 10.0;
+    }
+
+
 }

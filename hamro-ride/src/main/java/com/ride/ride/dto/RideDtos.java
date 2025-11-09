@@ -28,8 +28,14 @@ public class RideDtos {
             double dropoffLng,
             String dropoffAddress,
             RideStatus status,
-            Instant createdAt
+            Instant createdAt,
+            Double distanceMiles,
+            Double estimatedFare,
+            Double finalFare,
+            Integer driverRating,
+            Integer passengerRating
     ) {}
+
 
     public record NearbyDriverResp(
             UUID driverId,

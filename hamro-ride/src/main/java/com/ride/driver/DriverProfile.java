@@ -20,7 +20,7 @@ public class DriverProfile {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)
     private DriverStatus status = DriverStatus.OFFLINE;
-
+    
     private String make;
     private String model;
     private String plate;
