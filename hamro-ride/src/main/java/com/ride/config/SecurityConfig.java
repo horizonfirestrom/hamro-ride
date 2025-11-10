@@ -26,6 +26,7 @@ public class SecurityConfig {
 	        .requestMatchers("/api/v1/auth/register","/api/v1/auth/login","/api/v1/health").permitAll()
 	        .requestMatchers("/api/v1/driver/**").hasRole("DRIVER")
 	        .requestMatchers("/api/v1/rides/**").hasRole("PASSENGER")
+	        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 	        .anyRequest().authenticated()
 	    );
 	    

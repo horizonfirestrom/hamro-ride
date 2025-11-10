@@ -9,5 +9,11 @@ public interface RideRepository extends JpaRepository<Ride, UUID> {
     List<Ride> findByPassengerIdOrderByCreatedAtDesc(UUID passengerId);
     List<Ride> findByDriverId(UUID driverId);
     List<Ride> findByDriverIdAndDriverRatingIsNotNull(UUID driverId);
+    
+    // Admin: list all by status
+    List<Ride> findByStatus(RideStatus status);
+
+    // Admin: active rides (non-terminal)
+    List<Ride> findByStatusIn(List<RideStatus> statuses);
 
 }

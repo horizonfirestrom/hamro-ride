@@ -42,16 +42,15 @@ public class DriverService {
      */
     @Transactional
     public ProfileResp upsertProfile(Authentication auth, ProfileUpsertReq req) {
-        UUID userId = currentUserId(auth);
-        User user = users.findById(userId).orElseThrow();
+        UUID id = currentUserId(auth);
 
-        // Either load existing profile for this user or create a new one
-        DriverProfile profile = profiles.findByUserId(userId)
-                .orElseGet(() -> {
-                    DriverProfile p = new DriverProfile();
-                    p.setUser(user);               // link to owning user
-                    return p;
-                });
+        User user = users.findById(id).orElseThrow();
+
+        DriverProfile profile = profiles.findById(id).orElse(null);
+        if (profile == null) {
+            profile = new DriverProfile();
+            profile.setUser(user);      // sets user + userId
+        }
 
         profile.setMake(req.make());
         profile.setModel(req.model());
@@ -61,6 +60,7 @@ public class DriverService {
         profiles.save(profile);
         return toResp(profile);
     }
+
 
     /**
      * Update driver's availability status.
@@ -125,11 +125,8 @@ public class DriverService {
     }
 
     private ProfileResp toResp(DriverProfile p) {
-        // Expose the driver's userId externally
-        UUID driverId = p.getUser() != null ? p.getUser().getId() : null;
-
         return new ProfileResp(
-                driverId,
+                p.getUserId(),
                 p.getStatus(),
                 p.getMake(),
                 p.getModel(),
