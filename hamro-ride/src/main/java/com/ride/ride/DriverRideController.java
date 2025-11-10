@@ -1,5 +1,6 @@
 package com.ride.ride;
 
+import com.ride.ride.dto.RideDtos.RatePassengerReq;
 import com.ride.ride.dto.RideDtos.RideResp;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -45,5 +46,12 @@ public class DriverRideController {
     @PostMapping("/{rideId}/cancel")
     public RideResp cancel(@PathVariable UUID rideId, Authentication auth) {
         return service.cancelAsDriver(rideId, auth);
+    }
+    
+    @PostMapping("/{rideId}/rate-passenger")
+    public RideResp ratePassenger(@PathVariable UUID rideId,
+                                  @RequestBody RatePassengerReq req,
+                                  Authentication auth) {
+        return service.ratePassenger(rideId, req.rating(), auth);
     }
 }

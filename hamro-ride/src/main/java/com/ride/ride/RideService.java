@@ -8,12 +8,16 @@ import com.ride.driver.DriverProfileRepository;
 import com.ride.driver.DriverService;
 import com.ride.driver.dto.DriverDtos;
 import com.ride.pricing.FareService;
+import com.ride.realtime.RideUpdateMessage;
 import com.ride.ride.dto.RideDtos.CreateRideReq;
 import com.ride.ride.dto.RideDtos.RideResp;
+
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -25,12 +29,15 @@ public class RideService {
     private final DriverService driverService;
     private final FareService fareService;
     private final DriverProfileRepository driverProfiles;
+    private final SimpMessagingTemplate messaging;
 
-    public RideService(RideRepository rides, DriverService driverService, FareService fareService, DriverProfileRepository driverProfiles) {
+    public RideService(RideRepository rides, DriverService driverService, FareService fareService, DriverProfileRepository driverProfiles, SimpMessagingTemplate messaging) {
         this.rides = rides;
         this.driverService = driverService;
         this.fareService = fareService;
         this.driverProfiles = driverProfiles;
+        this.messaging = messaging;
+        
     }
 
     private UUID currentUserId(Authentication auth) {
@@ -72,6 +79,7 @@ public class RideService {
         }
 
         rides.save(r);
+        publishRideUpdate(r);
         return toResp(r);
     }
 
@@ -105,6 +113,7 @@ public class RideService {
 
         r.setStatus(RideStatus.CANCELLED_BY_PASSENGER);
         rides.save(r);
+        publishRideUpdate(r);
         return toResp(r);
     }
 
@@ -150,6 +159,7 @@ public class RideService {
         }
         r.setStatus(RideStatus.DRIVER_ARRIVING);
         rides.save(r);
+        publishRideUpdate(r);
         return toResp(r);
     }
 
@@ -162,19 +172,29 @@ public class RideService {
         }
         r.setStatus(RideStatus.IN_PROGRESS);
         rides.save(r);
+        publishRideUpdate(r);
         return toResp(r);
     }
 
     @Transactional
     public RideResp completeRide(UUID rideId, Authentication auth) {
-        Ride r = getRideForDriverOrThrow(rideId, auth);
+    	Ride r = getRideForDriverOrThrow(rideId, auth);
+
         if (r.getStatus() != RideStatus.IN_PROGRESS) {
-            throw new IllegalStateException("Only in-progress rides can be completed");
+            throw new BadRequestException("Only in-progress rides can be completed");
         }
+
         r.setStatus(RideStatus.COMPLETED);
+        if (r.getFinalFare() == null && r.getEstimatedFare() != null) {
+            r.setFinalFare(r.getEstimatedFare());
+        }
+
         rides.save(r);
+        publishRideUpdate(r);  // NEW
+
         return toResp(r);
     }
+
 
     @Transactional
     public RideResp cancelAsDriver(UUID rideId, Authentication auth) {
@@ -189,6 +209,7 @@ public class RideService {
         }
         r.setStatus(RideStatus.CANCELLED_BY_DRIVER);
         rides.save(r);
+        publishRideUpdate(r);
         return toResp(r);
     }
 
@@ -251,6 +272,7 @@ public class RideService {
 
         // set / overwrite rating for this ride
         r.setDriverRating(rating);
+        publishRideUpdate(r);
         rides.save(r);
 
         // --- NEW: recompute driver's average rating ---
@@ -276,6 +298,46 @@ public class RideService {
     private double roundToOneDecimal(double value) {
         return Math.round(value * 10.0) / 10.0;
     }
+    
+    @Transactional
+    public RideResp ratePassenger(UUID rideId, int rating, Authentication auth) {
+        UUID driverId = currentUserId(auth);
+        Ride r = rides.findById(rideId)
+                .orElseThrow(() -> new NotFoundException("Ride not found"));
+
+        if (r.getDriverId() == null || !driverId.equals(r.getDriverId())) {
+            throw new ForbiddenException("You are not driver of this ride");
+        }
+        if (r.getStatus() != RideStatus.COMPLETED) {
+            throw new BadRequestException("Can rate passenger only after ride is completed");
+        }
+        if (rating < 1 || rating > 5) {
+            throw new BadRequestException("Rating must be between 1 and 5");
+        }
+
+        r.setPassengerRating(rating);
+        rides.save(r);
+        publishRideUpdate(r);
+
+        // (Optional) later: compute passenger's avg rating similarly
+        return toResp(r);
+    }
+    
+    private void publishRideUpdate(Ride r) {
+        RideUpdateMessage msg = new RideUpdateMessage(
+                r.getId(),
+                r.getPassengerId(),
+                r.getDriverId(),
+                r.getStatus(),
+                r.getDistanceMiles(),
+                r.getEstimatedFare(),
+                r.getFinalFare(),
+                Instant.now()
+        );
+        String destination = "/topic/rides/" + r.getId();
+        messaging.convertAndSend(destination, msg);
+    }
+
 
 
 }

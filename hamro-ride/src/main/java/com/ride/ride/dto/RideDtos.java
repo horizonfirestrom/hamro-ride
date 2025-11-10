@@ -58,4 +58,7 @@ public class RideDtos {
     public record UpdateRideStatusReq(
             @NotNull RideStatus status
     ) {}
+    
+    public record RatePassengerReq(int rating) {}
+
 }
